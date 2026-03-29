@@ -808,6 +808,6 @@ st.markdown("""
 <div class='footer'>
     🌊 Flood Prediction Dashboard · Judicaël Karol DOBOEVI · ENSGMM, Bénin<br>
     Projet Fil Conducteur — Formation Data Scientist · Africa Tech Up Tour<br>
-    LightGBM · K-Fold Cross-Validation · Score R² public : 0.86931
+    LightGBM · K-Fold Cross-Validation · Score R² : 0.869
 </div>
 """, unsafe_allow_html=True)
