@@ -291,12 +291,12 @@ def generate_demo_data(n=6000, seed=42):
     return df
 
 
-def create_features(df: pd.DataFrame, cols: list) -> pd.DataFrame:
+def _build_features_no_scale(df: pd.DataFrame, cols: list) -> pd.DataFrame:
     """
-    Feature engineering — fidèle au notebook.
-    Scaler ajusté sur les données fournies.
+    Construit toutes les features dérivées SANS normaliser les colonnes originales.
+    Les colonnes `cols` restent dans leur espace brut — la normalisation est
+    appliquée séparément via un scaler ajusté une seule fois sur le train.
     """
-    scaler = StandardScaler()
     df = df.copy()
 
     # Interactions métier
@@ -310,7 +310,7 @@ def create_features(df: pd.DataFrame, cols: list) -> pd.DataFrame:
         (df['RiverManagement'] + df['IneffectiveDisasterPreparedness'] + df['InadequatePlanning'])
     )
 
-    # Statistiques de ligne
+    # Statistiques de ligne (calculées sur les valeurs BRUTES — avant normalisation)
     df['row_sum']    = df[cols].sum(axis=1)
     df['row_mean']   = df[cols].mean(axis=1)
     df['row_std']    = df[cols].std(axis=1)
@@ -348,16 +348,26 @@ def create_features(df: pd.DataFrame, cols: list) -> pd.DataFrame:
     for v in range(16):
         df[f'cnt_{v}'] = (df[cols] == v).sum(axis=1)
 
-    # Normalisation des features originales
-    df[cols] = scaler.fit_transform(df[cols])
     return df
+
+
+def create_features(df: pd.DataFrame, cols: list):
+    """
+    Feature engineering complet pour l'entraînement.
+    Retourne (df_engineered, scaler_fitted) — le scaler doit être conservé
+    pour normaliser de la même façon toute nouvelle observation.
+    """
+    df = _build_features_no_scale(df, cols)
+    scaler = StandardScaler()
+    df[cols] = scaler.fit_transform(df[cols])
+    return df, scaler
 
 
 @st.cache_resource
 def train_model():
     """Entraîne le modèle avec la validation croisée K-Fold du notebook."""
     df = generate_demo_data(n=8000)
-    df_feat = create_features(df, NUM_COLS)
+    df_feat, scaler = create_features(df, NUM_COLS)
     feature_cols = [c for c in df_feat.columns if c != 'FloodProbability']
     X = df_feat[feature_cols]
     y = df_feat['FloodProbability']
@@ -391,13 +401,19 @@ def train_model():
     model = lgb.LGBMRegressor(**params)
     model.fit(X, y)
 
-    return model, feature_cols, val_scores, train_scores, oof_preds, y.values, df
+    # scaler retourné pour normaliser les prédictions interactives
+    return model, scaler, feature_cols, val_scores, train_scores, oof_preds, y.values, df
 
 
-def predict_single(model, feature_cols, values_dict):
-    """Prédit la probabilité pour une observation saisie manuellement."""
+def predict_single(model, scaler, feature_cols, values_dict):
+    """
+    Prédit la probabilité pour une observation saisie manuellement.
+    Utilise le scaler ajusté sur les données d'entraînement — pas de re-fit.
+    """
     df_single = pd.DataFrame([values_dict])
-    df_feat   = create_features(df_single, NUM_COLS)
+    df_feat   = _build_features_no_scale(df_single, NUM_COLS)
+    # Normalisation avec le scaler du train (transform uniquement, pas fit)
+    df_feat[NUM_COLS] = scaler.transform(df_feat[NUM_COLS])
     for c in feature_cols:
         if c not in df_feat.columns:
             df_feat[c] = 0
@@ -430,7 +446,7 @@ def plotly_theme():
 # CHARGEMENT
 # ─────────────────────────────────────────────────────────────────────────────
 with st.spinner("Entraînement du modèle en cours..."):
-    model, feature_cols, val_scores, train_scores, oof_preds, y_true, df_demo = train_model()
+    model, scaler, feature_cols, val_scores, train_scores, oof_preds, y_true, df_demo = train_model()
 
 r2_oof  = r2_score(y_true, oof_preds)
 rmse    = np.sqrt(mean_squared_error(y_true, oof_preds))
@@ -837,7 +853,7 @@ elif page == "Prediction Interactive":
         submitted = st.form_submit_button("Calculer la probabilite", use_container_width=True)
 
     if submitted:
-        prob = predict_single(model, feature_cols, values)
+        prob = predict_single(model, scaler, feature_cols, values)
         level, color = risk_level(prob)
 
         st.markdown("---")
