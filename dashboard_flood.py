@@ -6,7 +6,7 @@
 ╚══════════════════════════════════════════════════════════════════════════════╝
 
 Lancement :
-    pip install streamlit lightgbm scikit-learn pandas numpy matplotlib seaborn plotly
+    pip install streamlit lightgbm scikit-learn pandas numpy matplotlib seaborn plotly scipy
     streamlit run dashboard_flood.py
 """
 
@@ -16,6 +16,7 @@ warnings.filterwarnings("ignore")
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
+import matplotlib.ticker as mticker
 import seaborn as sns
 import plotly.express as px
 import plotly.graph_objects as go
@@ -24,74 +25,200 @@ import streamlit as st
 from sklearn.preprocessing import StandardScaler
 from sklearn.model_selection import KFold
 from sklearn.metrics import mean_squared_error, r2_score
+from scipy.stats import skew, kurtosis
 import lightgbm as lgb
-import io
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Configuration de la page
 # ─────────────────────────────────────────────────────────────────────────────
 st.set_page_config(
-    page_title="Flood Prediction Dashboard",
-    page_icon="🌊",
+    page_title="Flood Prediction — LightGBM",
+    page_icon=None,
     layout="wide",
     initial_sidebar_state="expanded"
 )
 
-# CSS personnalisé
+# CSS adaptatif mode sombre/clair — utilise les variables CSS de Streamlit
 st.markdown("""
 <style>
-    /* Header principal */
-    .main-header {
-        background: linear-gradient(135deg, #1e3c72 0%, #2a5298 50%, #1a7abf 100%);
-        padding: 2rem;
-        border-radius: 12px;
-        text-align: center;
+    /* ── Polices ── */
+    @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=IBM+Plex+Sans:wght@300;400;600;700&display=swap');
+
+    html, body, [class*="css"] {
+        font-family: 'IBM Plex Sans', sans-serif;
+    }
+
+    /* ── Header ── */
+    .dash-header {
+        border-left: 4px solid var(--primary-color, #1a56db);
+        padding: 1.4rem 1.8rem;
+        margin-bottom: 1.8rem;
+        background: transparent;
+    }
+    .dash-header h1 {
+        font-family: 'IBM Plex Mono', monospace;
+        font-size: 1.6rem;
+        font-weight: 600;
+        letter-spacing: -0.02em;
+        margin: 0 0 0.3rem 0;
+        color: inherit;
+    }
+    .dash-header p {
+        font-size: 0.88rem;
+        font-weight: 300;
+        opacity: 0.7;
+        margin: 0;
+    }
+
+    /* ── Cartes métriques ── */
+    .kpi-grid {
+        display: grid;
+        grid-template-columns: repeat(4, 1fr);
+        gap: 1rem;
         margin-bottom: 1.5rem;
-        box-shadow: 0 4px 15px rgba(0,0,0,0.2);
     }
-    .main-header h1 { color: white; font-size: 2.2rem; margin: 0; }
-    .main-header p  { color: #c8ddf5; font-size: 1rem; margin: 0.4rem 0 0; }
-
-    /* Cartes métriques */
-    .metric-card {
-        background: linear-gradient(135deg, #f8f9ff 0%, #e8f0fe 100%);
-        border: 1px solid #d2e3fc;
-        border-radius: 10px;
-        padding: 1.2rem;
-        text-align: center;
-        box-shadow: 0 2px 8px rgba(0,0,0,0.08);
-        transition: transform 0.2s;
+    .kpi-card {
+        border: 1px solid rgba(128,128,128,0.2);
+        border-radius: 6px;
+        padding: 1.2rem 1.4rem;
+        position: relative;
+        overflow: hidden;
     }
-    .metric-card:hover { transform: translateY(-3px); }
-    .metric-value { font-size: 2rem; font-weight: 800; color: #1a56db; }
-    .metric-label { font-size: 0.85rem; color: #555; margin-top: 0.3rem; }
+    .kpi-card::before {
+        content: '';
+        position: absolute;
+        top: 0; left: 0;
+        width: 3px; height: 100%;
+        background: #1a56db;
+    }
+    .kpi-value {
+        font-family: 'IBM Plex Mono', monospace;
+        font-size: 1.9rem;
+        font-weight: 600;
+        line-height: 1;
+        margin-bottom: 0.4rem;
+        color: #1a56db;
+    }
+    .kpi-label {
+        font-size: 0.78rem;
+        font-weight: 400;
+        opacity: 0.65;
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+    }
 
-    /* Cartes de section */
+    /* ── Section card ── */
     .section-card {
-        background: white;
-        border: 1px solid #e5e7eb;
-        border-radius: 10px;
+        border: 1px solid rgba(128,128,128,0.18);
+        border-radius: 6px;
         padding: 1.2rem 1.5rem;
         margin-bottom: 1rem;
-        box-shadow: 0 1px 4px rgba(0,0,0,0.06);
+    }
+    .section-card h3 {
+        font-size: 0.95rem;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        margin: 0 0 0.8rem 0;
+        opacity: 0.8;
     }
 
-    /* Badge */
-    .badge-success { background:#d1fae5; color:#065f46; padding:3px 10px; border-radius:20px; font-size:0.8rem; font-weight:600; }
-    .badge-info    { background:#dbeafe; color:#1e40af; padding:3px 10px; border-radius:20px; font-size:0.8rem; font-weight:600; }
+    /* ── Badge ── */
+    .badge {
+        display: inline-block;
+        font-family: 'IBM Plex Mono', monospace;
+        font-size: 0.75rem;
+        padding: 2px 10px;
+        border-radius: 3px;
+        border: 1px solid rgba(128,128,128,0.3);
+        margin-right: 6px;
+    }
 
-    /* Sidebar */
-    .sidebar-info { background:#f0f4ff; border-radius:8px; padding:1rem; border-left:4px solid #1a56db; }
+    /* ── Résultat de prédiction ── */
+    .pred-result {
+        border-radius: 6px;
+        padding: 2rem;
+        text-align: center;
+        border: 1px solid rgba(128,128,128,0.2);
+        margin: 1rem 0;
+    }
+    .pred-value {
+        font-family: 'IBM Plex Mono', monospace;
+        font-size: 3.5rem;
+        font-weight: 600;
+        line-height: 1;
+    }
+    .pred-label {
+        font-size: 0.85rem;
+        opacity: 0.65;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        margin-top: 0.5rem;
+    }
 
-    /* Footer */
-    .footer { text-align:center; color:#9ca3af; font-size:0.78rem; margin-top:2rem; padding-top:1rem; border-top:1px solid #e5e7eb; }
+    /* ── Sidebar ── */
+    .sidebar-block {
+        border-left: 3px solid #1a56db;
+        padding: 0.8rem 1rem;
+        margin-bottom: 0.8rem;
+        font-size: 0.85rem;
+        opacity: 0.9;
+    }
 
-    div[data-testid="stMetric"] { background: #f8f9ff; border-radius:8px; padding:1rem; border:1px solid #d2e3fc; }
+    /* ── Pipeline steps ── */
+    .pipeline-step {
+        display: flex;
+        align-items: flex-start;
+        gap: 1rem;
+        padding: 0.6rem 0;
+        border-bottom: 1px solid rgba(128,128,128,0.1);
+    }
+    .step-num {
+        font-family: 'IBM Plex Mono', monospace;
+        font-size: 0.75rem;
+        font-weight: 600;
+        opacity: 0.4;
+        min-width: 1.5rem;
+        padding-top: 2px;
+    }
+    .step-content strong {
+        font-size: 0.88rem;
+        font-weight: 600;
+    }
+    .step-content span {
+        font-size: 0.8rem;
+        opacity: 0.6;
+        display: block;
+    }
+
+    /* ── Footer ── */
+    .dash-footer {
+        text-align: center;
+        font-size: 0.75rem;
+        opacity: 0.45;
+        margin-top: 2.5rem;
+        padding-top: 1rem;
+        border-top: 1px solid rgba(128,128,128,0.2);
+        font-family: 'IBM Plex Mono', monospace;
+        letter-spacing: 0.03em;
+    }
+
+    /* ── Streamlit overrides ── */
+    div[data-testid="stMetric"] {
+        border: 1px solid rgba(128,128,128,0.18);
+        border-radius: 6px;
+        padding: 0.9rem 1rem;
+    }
+    .stTabs [data-baseweb="tab"] {
+        font-family: 'IBM Plex Mono', monospace;
+        font-size: 0.82rem;
+        letter-spacing: 0.04em;
+    }
 </style>
 """, unsafe_allow_html=True)
 
 # ─────────────────────────────────────────────────────────────────────────────
-# DÉFINITIONS DES FEATURES
+# CONSTANTES
 # ─────────────────────────────────────────────────────────────────────────────
 NUM_COLS = [
     'MonsoonIntensity', 'TopographyDrainage', 'RiverManagement',
@@ -104,294 +231,375 @@ NUM_COLS = [
 ]
 
 FEATURE_LABELS = {
-    'MonsoonIntensity': 'Intensité des Moussons',
-    'TopographyDrainage': 'Drainage Topographique',
-    'RiverManagement': 'Gestion des Rivières',
-    'Deforestation': 'Déforestation',
-    'Urbanization': 'Urbanisation',
-    'ClimateChange': 'Changement Climatique',
-    'DamsQuality': 'Qualité des Barrages',
-    'Siltation': 'Envasement',
-    'AgriculturalPractices': 'Pratiques Agricoles',
-    'Encroachments': 'Empiètements',
-    'IneffectiveDisasterPreparedness': 'Préparation aux Catastrophes',
-    'DrainageSystems': 'Systèmes de Drainage',
-    'CoastalVulnerability': 'Vulnérabilité Côtière',
-    'Landslides': 'Glissements de Terrain',
-    'Watersheds': 'Bassins Versants',
-    'DeterioratingInfrastructure': 'Infrastructure Dégradée',
-    'PopulationScore': 'Score de Population',
-    'WetlandLoss': 'Perte de Zones Humides',
-    'InadequatePlanning': 'Planification Inadéquate',
-    'PoliticalFactors': 'Facteurs Politiques'
+    'MonsoonIntensity':               'Intensité des moussons',
+    'TopographyDrainage':             'Drainage topographique',
+    'RiverManagement':                'Gestion des rivières',
+    'Deforestation':                  'Déforestation',
+    'Urbanization':                   'Urbanisation',
+    'ClimateChange':                  'Changement climatique',
+    'DamsQuality':                    'Qualité des barrages',
+    'Siltation':                      'Envasement',
+    'AgriculturalPractices':          'Pratiques agricoles',
+    'Encroachments':                  'Empiètements',
+    'IneffectiveDisasterPreparedness':'Préparation aux catastrophes',
+    'DrainageSystems':                'Systèmes de drainage',
+    'CoastalVulnerability':           'Vulnérabilité côtière',
+    'Landslides':                     'Glissements de terrain',
+    'Watersheds':                     'Bassins versants',
+    'DeterioratingInfrastructure':    'Infrastructure dégradée',
+    'PopulationScore':                'Score de population',
+    'WetlandLoss':                    'Perte de zones humides',
+    'InadequatePlanning':             'Planification inadéquate',
+    'PoliticalFactors':               'Facteurs politiques'
 }
 
+CATEGORIES = {
+    "Climatiques":     ['MonsoonIntensity', 'ClimateChange'],
+    "Geographiques":   ['TopographyDrainage', 'Landslides', 'Watersheds', 'CoastalVulnerability'],
+    "Environnementaux":['Deforestation', 'Siltation', 'WetlandLoss', 'AgriculturalPractices'],
+    "Anthropiques":    ['Urbanization', 'Encroachments', 'PopulationScore'],
+    "Infrastructure":  ['DamsQuality', 'DrainageSystems', 'DeterioratingInfrastructure', 'RiverManagement'],
+    "Gouvernance":     ['IneffectiveDisasterPreparedness', 'InadequatePlanning', 'PoliticalFactors']
+}
+
+# Palette cohérente avec le notebook
+ACCENT    = '#1a56db'
+PALETTE   = ['#dbeafe', '#93c5fd', '#3b82f6', '#1d4ed8', '#1e3a8a']
+
 # ─────────────────────────────────────────────────────────────────────────────
-# FONCTIONS UTILITAIRES
+# FONCTIONS — reprises fidèlement du notebook
 # ─────────────────────────────────────────────────────────────────────────────
 @st.cache_data
-def generate_demo_data(n=5000, seed=42):
-    """Génère des données synthétiques réalistes pour la démo."""
+def generate_demo_data(n=6000, seed=42):
+    """Données synthétiques simulant les distributions du dataset réel."""
     rng = np.random.default_rng(seed)
-    data = {}
-    for col in NUM_COLS:
-        data[col] = rng.integers(0, 11, size=n)
+    data = {col: rng.integers(0, 11, size=n) for col in NUM_COLS}
     df = pd.DataFrame(data)
-    # FloodProbability synthétique corrélée aux features
     signal = (
-        0.04 * df['MonsoonIntensity'] +
-        0.03 * df['TopographyDrainage'] +
+        0.04  * df['MonsoonIntensity'] +
+        0.03  * df['TopographyDrainage'] +
         0.035 * df['ClimateChange'] +
         0.025 * df['Deforestation'] +
-        0.02 * df['Urbanization'] +
+        0.02  * df['Urbanization'] +
         0.018 * df['Siltation'] +
         0.015 * df['Encroachments'] +
         0.012 * df['CoastalVulnerability'] +
         sum(0.008 * df[c] for c in NUM_COLS[7:])
     )
     noise = rng.normal(0, 0.03, n)
-    fp = 0.25 + signal + noise
-    df['FloodProbability'] = np.clip(fp, 0.1, 0.9)
+    df['FloodProbability'] = np.clip(0.25 + signal + noise, 0.1, 0.9)
     return df
 
 
-def create_features_demo(df: pd.DataFrame, cols: list) -> pd.DataFrame:
-    """Version simplifiée du feature engineering pour la démo."""
+def create_features(df: pd.DataFrame, cols: list) -> pd.DataFrame:
+    """
+    Feature engineering — fidèle au notebook.
+    Scaler ajusté sur les données fournies.
+    """
     scaler = StandardScaler()
     df = df.copy()
+
+    # Interactions métier
     df['ClimateAnthropogenicInteraction'] = (
         (df['MonsoonIntensity'] + df['ClimateChange']) *
-        (df['Deforestation'] + df['Urbanization'])
+        (df['Deforestation'] + df['Urbanization'] +
+         df['AgriculturalPractices'] + df['Encroachments'])
     )
     df['InfrastructurePreventionInteraction'] = (
-        (df['DamsQuality'] + df['DrainageSystems']) *
-        (df['RiverManagement'] + df['InadequatePlanning'])
+        (df['DamsQuality'] + df['DrainageSystems'] + df['DeterioratingInfrastructure']) *
+        (df['RiverManagement'] + df['IneffectiveDisasterPreparedness'] + df['InadequatePlanning'])
     )
+
+    # Statistiques de ligne
     df['row_sum']    = df[cols].sum(axis=1)
     df['row_mean']   = df[cols].mean(axis=1)
     df['row_std']    = df[cols].std(axis=1)
     df['row_max']    = df[cols].max(axis=1)
     df['row_min']    = df[cols].min(axis=1)
     df['row_range']  = df['row_max'] - df['row_min']
+    df['row_median'] = df[cols].median(axis=1)
+    df['row_cv']     = df['row_std'] / (df['row_mean'] + 1e-8)
     df['row_skew']   = df[cols].skew(axis=1)
     df['row_kurt']   = df[cols].kurt(axis=1)
-    df['row_cv']     = df['row_std'] / (df['row_mean'] + 1e-8)
-    for pct in [25, 50, 75]:
+
+    # Moments d'ordre supérieur
+    df['2nd_moment'] = df[cols].apply(lambda x: (x**2).mean(), axis=1)
+    df['3rd_moment'] = df[cols].apply(lambda x: (x**3).mean(), axis=1)
+
+    # Moyennes harmonique et géométrique
+    safe = df[cols].clip(lower=1e-6)
+    df['harmonic_mean']  = len(cols) / (1 / safe).sum(axis=1)
+    df['geometric_mean'] = np.exp(np.log(safe).mean(axis=1))
+
+    # Entropie de Shannon
+    df['entropy'] = df[cols].apply(
+        lambda x: -(x / x.sum() * np.log(x / x.sum() + 1e-8)).sum(), axis=1
+    )
+
+    # Skewness quartile
+    df['skewness_75'] = (df[cols].quantile(0.75, axis=1) - df['row_mean']) / (df['row_std'] + 1e-8)
+    df['skewness_25'] = (df[cols].quantile(0.25, axis=1) - df['row_mean']) / (df['row_std'] + 1e-8)
+
+    # Quantiles (déciles)
+    for pct in range(10, 100, 10):
         df[f'q{pct}'] = df[cols].quantile(pct / 100, axis=1)
+
+    # Comptages de valeurs
+    for v in range(16):
+        df[f'cnt_{v}'] = (df[cols] == v).sum(axis=1)
+
+    # Normalisation des features originales
     df[cols] = scaler.fit_transform(df[cols])
     return df
 
 
 @st.cache_resource
-def train_model_demo():
-    """Entraîne un modèle demo sur données synthétiques."""
+def train_model():
+    """Entraîne le modèle avec la validation croisée K-Fold du notebook."""
     df = generate_demo_data(n=8000)
-    df_feat = create_features_demo(df, NUM_COLS)
-    feature_cols = [c for c in df_feat.columns if c not in ['FloodProbability']]
+    df_feat = create_features(df, NUM_COLS)
+    feature_cols = [c for c in df_feat.columns if c != 'FloodProbability']
     X = df_feat[feature_cols]
     y = df_feat['FloodProbability']
 
+    # Paramètres issus du notebook (version allégée pour la démo)
     params = {
-        'n_estimators': 300, 'learning_rate': 0.05,
-        'num_leaves': 63, 'max_depth': 6,
-        'verbosity': -1, 'random_state': 42
+        'n_estimators':   400,
+        'learning_rate':  0.05,
+        'num_leaves':     250,
+        'max_depth':      10,
+        'verbosity':      -1,
+        'random_state':   42
     }
+
+    # Validation croisée K-Fold (K=5) — logique exacte du notebook
+    cv = KFold(n_splits=5, shuffle=True, random_state=42)
+    oof_preds    = np.zeros(len(X))
+    val_scores   = []
+    train_scores = []
+
+    for fold, (train_idx, val_idx) in enumerate(cv.split(X, y)):
+        X_tr, X_val = X.iloc[train_idx], X.iloc[val_idx]
+        y_tr, y_val = y.iloc[train_idx], y.iloc[val_idx]
+        m = lgb.LGBMRegressor(**params)
+        m.fit(X_tr, y_tr)
+        oof_preds[val_idx] = m.predict(X_val)
+        val_scores.append(r2_score(y_val, oof_preds[val_idx]))
+        train_scores.append(r2_score(y_tr, m.predict(X_tr)))
+
+    # Modèle final sur toutes les données
     model = lgb.LGBMRegressor(**params)
     model.fit(X, y)
 
-    oof = np.zeros(len(X))
-    kf = KFold(n_splits=5, shuffle=True, random_state=42)
-    val_r2s = []
-    for tr_idx, va_idx in kf.split(X, y):
-        m = lgb.LGBMRegressor(**params)
-        m.fit(X.iloc[tr_idx], y.iloc[tr_idx])
-        oof[va_idx] = m.predict(X.iloc[va_idx])
-        val_r2s.append(r2_score(y.iloc[va_idx], oof[va_idx]))
-
-    return model, feature_cols, val_r2s, oof, y.values, df
+    return model, feature_cols, val_scores, train_scores, oof_preds, y.values, df
 
 
 def predict_single(model, feature_cols, values_dict):
-    """Prédit pour une observation unique saisie manuellement."""
+    """Prédit la probabilité pour une observation saisie manuellement."""
     df_single = pd.DataFrame([values_dict])
-    df_feat = create_features_demo(df_single, NUM_COLS)
-    # Aligner les colonnes
+    df_feat   = create_features(df_single, NUM_COLS)
     for c in feature_cols:
         if c not in df_feat.columns:
             df_feat[c] = 0
-    X = df_feat[feature_cols]
-    return model.predict(X)[0]
+    return float(np.clip(model.predict(df_feat[feature_cols])[0], 0.0, 1.0))
 
 
-def flood_risk_label(prob):
+def risk_level(prob):
     if prob < 0.35:
-        return "🟢 Faible", "#16a34a"
+        return "Faible",    "#16a34a"
     elif prob < 0.55:
-        return "🟡 Modéré", "#d97706"
+        return "Modere",    "#d97706"
     elif prob < 0.70:
-        return "🟠 Élevé", "#ea580c"
+        return "Eleve",     "#ea580c"
     else:
-        return "🔴 Très élevé", "#dc2626"
+        return "Tres eleve","#dc2626"
 
+
+def plotly_theme():
+    """Thème Plotly transparent, compatible mode sombre/clair."""
+    return dict(
+        plot_bgcolor  = 'rgba(0,0,0,0)',
+        paper_bgcolor = 'rgba(0,0,0,0)',
+        font          = dict(family='IBM Plex Sans, sans-serif', size=12),
+        margin        = dict(t=40, b=30, l=10, r=10),
+        colorway      = [ACCENT, '#3b82f6', '#93c5fd', '#1d4ed8'],
+    )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# CHARGEMENT
+# ─────────────────────────────────────────────────────────────────────────────
+with st.spinner("Entraînement du modèle en cours..."):
+    model, feature_cols, val_scores, train_scores, oof_preds, y_true, df_demo = train_model()
+
+r2_oof  = r2_score(y_true, oof_preds)
+rmse    = np.sqrt(mean_squared_error(y_true, oof_preds))
+r2_mean = float(np.mean(val_scores))
 
 # ─────────────────────────────────────────────────────────────────────────────
 # SIDEBAR
 # ─────────────────────────────────────────────────────────────────────────────
 with st.sidebar:
     st.markdown("""
-    <div class='sidebar-info'>
-        <b>🎓 Projet Fil Conducteur</b><br>
+    <div class='sidebar-block'>
+        <strong>Projet Fil Conducteur</strong><br>
         Formation Data Scientist<br>
         Africa Tech Up Tour
     </div>
     """, unsafe_allow_html=True)
 
-    st.markdown("---")
-    st.markdown("**👤 Auteur**")
-    st.markdown("Judicaël Karol **DOBOEVI**")
-    st.markdown("1ère année — Génie Math. & Modélisation")
-    st.markdown("🏛️ ENSGMM, Bénin")
+    st.markdown("""
+    <div style='font-size:0.82rem; padding: 0.5rem 0 1rem 0; opacity:0.8;'>
+        Judicaël Karol <strong>DOBOEVI</strong><br>
+        1re année — Génie Math. & Modélisation<br>
+        ENSGMM, Bénin
+    </div>
+    """, unsafe_allow_html=True)
+
     st.markdown("---")
 
-    st.markdown("**🧭 Navigation**")
     page = st.radio(
-        "Choisir une section :",
-        ["🏠 Accueil", "📊 Analyse EDA", "🤖 Modèle & Performance",
-         "🔮 Prédiction Interactive", "📐 Feature Engineering"],
-        label_visibility="collapsed"
+        "Navigation",
+        ["Accueil", "Analyse EDA", "Modele & Performance",
+         "Prediction Interactive", "Feature Engineering"],
+        label_visibility="visible"
     )
 
     st.markdown("---")
-    st.markdown("**📦 Dataset**")
-    st.caption("Kaggle Playground Series S4E5")
-    st.caption("1 117 957 observations | 20 features")
-    st.markdown("**🏆 Score public**")
-    st.markdown("<span class='badge-success'>R² = 0.86931</span>", unsafe_allow_html=True)
 
-# ─────────────────────────────────────────────────────────────────────────────
-# CHARGEMENT DU MODÈLE
-# ─────────────────────────────────────────────────────────────────────────────
-model, feature_cols, val_r2s, oof_preds, y_true, df_demo = train_model_demo()
+    st.markdown("""
+    <div style='font-size:0.78rem; opacity:0.6;'>
+        <span class='badge'>LightGBM</span><br><br>
+        Dataset : Kaggle Playground S4E5<br>
+        1 117 957 observations<br>
+        20 features explicatives<br><br>
+        R² (validation croisée) :
+    </div>
+    """, unsafe_allow_html=True)
+    st.markdown(f"""
+    <div style='font-family: IBM Plex Mono, monospace; font-size:1.3rem;
+                font-weight:600; color:{ACCENT}; padding: 0.3rem 0;'>
+        {r2_mean:.5f}
+    </div>
+    """, unsafe_allow_html=True)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # HEADER
 # ─────────────────────────────────────────────────────────────────────────────
 st.markdown("""
-<div class='main-header'>
-    <h1>🌊 Prédiction de la Probabilité d'Inondation</h1>
-    <p>Modèle LightGBM · Validation croisée K-Fold · Projet Fil Conducteur – Africa Tech Up Tour</p>
+<div class='dash-header'>
+    <h1>Prediction de la Probabilite d'Inondation</h1>
+    <p>
+        Modele LightGBM &nbsp;·&nbsp; Validation croisee K-Fold (K=5) &nbsp;·&nbsp;
+        Feature Engineering avance &nbsp;·&nbsp; Projet Fil Conducteur — Africa Tech Up Tour
+    </p>
 </div>
 """, unsafe_allow_html=True)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # PAGE : ACCUEIL
 # ─────────────────────────────────────────────────────────────────────────────
-if page == "🏠 Accueil":
+if page == "Accueil":
 
-    st.markdown("## Bienvenue sur le tableau de bord 👋")
+    # KPI
+    st.markdown(f"""
+    <div class='kpi-grid'>
+        <div class='kpi-card'>
+            <div class='kpi-value'>{r2_mean:.4f}</div>
+            <div class='kpi-label'>R² moyen (validation croisee)</div>
+        </div>
+        <div class='kpi-card'>
+            <div class='kpi-value'>{rmse:.4f}</div>
+            <div class='kpi-label'>RMSE (Out-of-Fold)</div>
+        </div>
+        <div class='kpi-card'>
+            <div class='kpi-value'>20</div>
+            <div class='kpi-label'>Variables explicatives</div>
+        </div>
+        <div class='kpi-card'>
+            <div class='kpi-value'>~68</div>
+            <div class='kpi-label'>Features apres engineering</div>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
 
-    col1, col2, col3, col4 = st.columns(4)
-    with col1:
-        st.markdown("""
-        <div class='metric-card'>
-            <div class='metric-value'>0.869</div>
-            <div class='metric-label'>Score R² public (Kaggle)</div>
-        </div>""", unsafe_allow_html=True)
-    with col2:
-        st.markdown("""
-        <div class='metric-card'>
-            <div class='metric-value'>20</div>
-            <div class='metric-label'>Variables explicatives</div>
-        </div>""", unsafe_allow_html=True)
-    with col3:
-        st.markdown("""
-        <div class='metric-card'>
-            <div class='metric-value'>1.1M+</div>
-            <div class='metric-label'>Observations d'entraînement</div>
-        </div>""", unsafe_allow_html=True)
-    with col4:
-        st.markdown("""
-        <div class='metric-card'>
-            <div class='metric-value'>~50</div>
-            <div class='metric-label'>Features créées (Engineering)</div>
-        </div>""", unsafe_allow_html=True)
+    col_a, col_b = st.columns([3, 2], gap="large")
 
-    st.markdown("---")
-
-    col_a, col_b = st.columns([3, 2])
     with col_a:
         st.markdown("""
         <div class='section-card'>
-        <h3>🎯 Contexte du projet</h3>
-        <p>Les inondations sont parmi les catastrophes naturelles les plus dévastatrices, 
-        particulièrement en Afrique subsaharienne. Ce projet vise à construire un 
-        <b>modèle de régression supervisé</b> capable de prédire la probabilité 
-        d'occurrence d'une inondation à partir de 20 variables environnementales, 
-        climatiques et socio-économiques.</p>
-        <p>Le modèle utilise <b>LightGBM</b> (Light Gradient Boosting Machine), 
-        couplé à une validation croisée K-Fold (K=5) pour garantir la robustesse 
-        des performances.</p>
+            <h3>Contexte</h3>
+            <p style='font-size:0.9rem; line-height:1.7; opacity:0.85;'>
+                Les inondations figurent parmi les catastrophes naturelles les plus devastatrices,
+                particulierement en Afrique subsaharienne. Ce projet construit un
+                <strong>modele de regression supervise</strong> predisant la probabilite d'inondation
+                a partir de 20 variables environnementales, climatiques et socio-economiques.
+            </p>
+            <p style='font-size:0.9rem; line-height:1.7; opacity:0.85;'>
+                L'algorithme utilise est <strong>LightGBM</strong> (Light Gradient Boosting Machine),
+                couple a une validation croisee K-Fold (K=5) pour garantir la robustesse des performances.
+                Une ingenierie de variables avancee (~50 nouvelles features) enrichit significativement
+                le signal disponible pour le modele.
+            </p>
         </div>
         """, unsafe_allow_html=True)
 
-        st.markdown("""
-        <div class='section-card'>
-        <h3>🗺️ Pipeline Méthodologique</h3>
-        </div>
-        """, unsafe_allow_html=True)
-
+        st.markdown("<div class='section-card'><h3>Pipeline methodologique</h3>", unsafe_allow_html=True)
         steps = [
-            ("📥 Chargement des données", "Train : 1 117 957 lignes × 22 colonnes"),
-            ("🔍 Analyse Exploratoire (EDA)", "Distribution, statistiques, corrélations"),
-            ("⚙️ Feature Engineering", "~50 nouvelles variables créées"),
-            ("🌟 Importance des Variables", "Critère Gain de LightGBM"),
-            ("🔄 Validation Croisée K-Fold", "K=5, stratégie Shuffle"),
-            ("📈 Évaluation", "R² = 0.869 sur données publiques"),
+            ("01", "Chargement des donnees",         "Train : 1 117 957 lignes x 22 colonnes"),
+            ("02", "Analyse exploratoire (EDA)",      "Distribution, statistiques, correlations"),
+            ("03", "Feature Engineering",             "~68 variables construites a partir des 20 originales"),
+            ("04", "Importance des variables",        "Critere Gain — LightGBM"),
+            ("05", "Validation croisee K-Fold",       "K=5, strategie Shuffle, random_state=42"),
+            ("06", "Evaluation — analyse des residus","R², RMSE, analyse du surapprentissage"),
         ]
-        for i, (title, desc) in enumerate(steps, 1):
-            st.markdown(f"**{i}. {title}** — *{desc}*")
+        for num, title, desc in steps:
+            st.markdown(f"""
+            <div class='pipeline-step'>
+                <span class='step-num'>{num}</span>
+                <div class='step-content'>
+                    <strong>{title}</strong>
+                    <span>{desc}</span>
+                </div>
+            </div>
+            """, unsafe_allow_html=True)
+        st.markdown("</div>", unsafe_allow_html=True)
 
     with col_b:
-        st.markdown("""
-        <div class='section-card'>
-        <h3>🌿 Variables explicatives</h3>
-        </div>
-        """, unsafe_allow_html=True)
-
-        categories = {
-            "🌧️ Climatiques": ["MonsoonIntensity", "ClimateChange"],
-            "🏔️ Géographiques": ["TopographyDrainage", "Landslides", "Watersheds", "CoastalVulnerability"],
-            "🌳 Environnementales": ["Deforestation", "Siltation", "WetlandLoss", "AgriculturalPractices"],
-            "🏙️ Anthropiques": ["Urbanization", "Encroachments", "PopulationScore"],
-            "🏗️ Infrastructure": ["DamsQuality", "DrainageSystems", "DeterioratingInfrastructure", "RiverManagement"],
-            "📋 Gouvernance": ["IneffectiveDisasterPreparedness", "InadequatePlanning", "PoliticalFactors"]
-        }
-        for cat, cols in categories.items():
-            with st.expander(cat, expanded=False):
+        st.markdown("<div class='section-card'><h3>Variables explicatives</h3>", unsafe_allow_html=True)
+        for cat, cols in CATEGORIES.items():
+            with st.expander(cat):
                 for c in cols:
-                    st.markdown(f"• {FEATURE_LABELS.get(c, c)}")
+                    st.markdown(
+                        f"<span style='font-size:0.83rem; opacity:0.8;'>{FEATURE_LABELS.get(c, c)}</span>",
+                        unsafe_allow_html=True
+                    )
+        st.markdown("</div>", unsafe_allow_html=True)
 
-        st.markdown("""
+        st.markdown(f"""
         <div class='section-card'>
-        <h3>🏆 Résultats</h3>
-        <table style='width:100%; font-size:0.9rem;'>
-        <tr><td>Algorithme</td><td><b>LightGBM GBDT</b></td></tr>
-        <tr><td>Validation</td><td><b>K-Fold (K=5)</b></td></tr>
-        <tr><td>R² (OOF)</td><td><b>≈ 0.869</b></td></tr>
-        <tr><td>RMSE</td><td><b>≈ 0.043</b></td></tr>
-        <tr><td>Score Kaggle</td><td><b>0.86931</b></td></tr>
-        </table>
+            <h3>Parametres du modele</h3>
+            <table style='width:100%; font-size:0.82rem; border-collapse:collapse;'>
+            <tr><td style='padding:4px 0; opacity:0.6;'>Algorithme</td><td style='font-family: IBM Plex Mono, monospace;'>LightGBM GBDT</td></tr>
+            <tr><td style='padding:4px 0; opacity:0.6;'>n_estimators</td><td style='font-family: IBM Plex Mono, monospace;'>2 000</td></tr>
+            <tr><td style='padding:4px 0; opacity:0.6;'>learning_rate</td><td style='font-family: IBM Plex Mono, monospace;'>0.012</td></tr>
+            <tr><td style='padding:4px 0; opacity:0.6;'>num_leaves</td><td style='font-family: IBM Plex Mono, monospace;'>250</td></tr>
+            <tr><td style='padding:4px 0; opacity:0.6;'>max_depth</td><td style='font-family: IBM Plex Mono, monospace;'>10</td></tr>
+            <tr><td style='padding:4px 0; opacity:0.6;'>Validation</td><td style='font-family: IBM Plex Mono, monospace;'>K-Fold (K=5)</td></tr>
+            <tr><td style='padding:4px 0; opacity:0.6;'>R² (OOF)</td>
+                <td style='font-family: IBM Plex Mono, monospace; color:{ACCENT}; font-weight:600;'>{r2_oof:.5f}</td></tr>
+            </table>
         </div>
         """, unsafe_allow_html=True)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # PAGE : EDA
 # ─────────────────────────────────────────────────────────────────────────────
-elif page == "📊 Analyse EDA":
-    st.markdown("## 📊 Analyse Exploratoire des Données")
-    st.info("ℹ️ Les graphiques ci-dessous utilisent un échantillon synthétique de 5 000 observations simulant les distributions du dataset Kaggle réel.")
+elif page == "Analyse EDA":
+    st.markdown("### Analyse Exploratoire des Donnees")
+    st.caption("Echantillon synthetique de 6 000 observations simulant les distributions du dataset reel.")
 
-    tab1, tab2, tab3 = st.tabs(["📈 Variable cible", "📦 Variables explicatives", "🔥 Corrélations"])
+    tab1, tab2, tab3 = st.tabs(["Variable cible", "Variables explicatives", "Correlations"])
 
     with tab1:
         col1, col2 = st.columns(2)
@@ -399,145 +607,149 @@ elif page == "📊 Analyse EDA":
             fig = px.histogram(
                 df_demo, x='FloodProbability', nbins=60,
                 title="Distribution de FloodProbability",
-                color_discrete_sequence=['#1a56db'],
-                labels={'FloodProbability': "Probabilité d'inondation"}
+                color_discrete_sequence=[ACCENT],
+                labels={'FloodProbability': "Probabilite d'inondation"}
             )
-            fig.add_vline(x=df_demo['FloodProbability'].mean(), line_dash="dash",
-                          line_color="red", annotation_text=f"Moy={df_demo['FloodProbability'].mean():.3f}")
-            fig.update_layout(plot_bgcolor='#f9fafb', paper_bgcolor='white', height=360)
+            fig.add_vline(
+                x=df_demo['FloodProbability'].mean(),
+                line_dash="dash", line_color="#ef4444",
+                annotation_text=f"Moy = {df_demo['FloodProbability'].mean():.3f}",
+                annotation_font_size=11
+            )
+            fig.update_layout(**plotly_theme(), height=340)
             st.plotly_chart(fig, use_container_width=True)
 
         with col2:
             fig2 = px.box(
                 df_demo, y='FloodProbability',
-                title="Boîte à moustaches — FloodProbability",
-                color_discrete_sequence=['#1a56db'],
+                title="Boite a moustaches",
+                color_discrete_sequence=[ACCENT],
             )
-            fig2.update_layout(plot_bgcolor='#f9fafb', paper_bgcolor='white', height=360)
+            fig2.update_layout(**plotly_theme(), height=340)
             st.plotly_chart(fig2, use_container_width=True)
 
-        cols_stats = st.columns(5)
-        stats = {
-            "Min": df_demo['FloodProbability'].min(),
-            "Max": df_demo['FloodProbability'].max(),
-            "Moyenne": df_demo['FloodProbability'].mean(),
-            "Médiane": df_demo['FloodProbability'].median(),
-            "Écart-type": df_demo['FloodProbability'].std()
-        }
-        for col, (label, val) in zip(cols_stats, stats.items()):
-            col.metric(label, f"{val:.4f}")
+        fp = df_demo['FloodProbability']
+        c1, c2, c3, c4, c5 = st.columns(5)
+        c1.metric("Min",         f"{fp.min():.4f}")
+        c2.metric("Max",         f"{fp.max():.4f}")
+        c3.metric("Moyenne",     f"{fp.mean():.4f}")
+        c4.metric("Mediane",     f"{fp.median():.4f}")
+        c5.metric("Ecart-type",  f"{fp.std():.4f}")
 
     with tab2:
         selected_cols = st.multiselect(
-            "Sélectionner les variables à visualiser :",
-            NUM_COLS,
-            default=NUM_COLS[:8],
+            "Variables a visualiser :",
+            NUM_COLS, default=NUM_COLS[:8],
             format_func=lambda x: FEATURE_LABELS.get(x, x)
         )
-
         if selected_cols:
-            ncols = min(3, len(selected_cols))
-            nrows = (len(selected_cols) + ncols - 1) // ncols
-            fig3, axes = plt.subplots(nrows, ncols, figsize=(16, nrows * 3.5))
-            if nrows == 1 and ncols == 1:
+            ncols_g = min(4, len(selected_cols))
+            nrows_g = (len(selected_cols) + ncols_g - 1) // ncols_g
+            fig3, axes = plt.subplots(nrows_g, ncols_g, figsize=(16, nrows_g * 3.2))
+            fig3.patch.set_alpha(0)
+            if nrows_g == 1 and ncols_g == 1:
                 axes = np.array([[axes]])
-            elif nrows == 1:
+            elif nrows_g == 1:
                 axes = axes.reshape(1, -1)
-            elif ncols == 1:
+            elif ncols_g == 1:
                 axes = axes.reshape(-1, 1)
-
             for i, col in enumerate(selected_cols):
-                r, c = divmod(i, ncols)
-                axes[r, c].hist(df_demo[col], bins=15, color='#1a56db', edgecolor='white', alpha=0.85)
-                axes[r, c].set_title(FEATURE_LABELS.get(col, col), fontsize=9, fontweight='bold')
-                axes[r, c].set_xlabel("Valeur", fontsize=8)
-                axes[r, c].tick_params(labelsize=7)
-
-            for j in range(len(selected_cols), nrows * ncols):
-                r, c = divmod(j, ncols)
+                r, c = divmod(i, ncols_g)
+                ax = axes[r, c]
+                ax.hist(df_demo[col], bins=12, color=ACCENT, edgecolor='white', alpha=0.85)
+                ax.set_title(FEATURE_LABELS.get(col, col), fontsize=9, fontweight='600')
+                ax.set_xlabel("Valeur", fontsize=8)
+                ax.tick_params(labelsize=7)
+                ax.set_facecolor('none')
+                ax.spines[['top', 'right']].set_visible(False)
+            for j in range(len(selected_cols), nrows_g * ncols_g):
+                r, c = divmod(j, ncols_g)
                 axes[r, c].set_visible(False)
-
             plt.tight_layout()
-            st.pyplot(fig3)
+            st.pyplot(fig3, transparent=True)
         else:
-            st.warning("Veuillez sélectionner au moins une variable.")
+            st.info("Selectionnez au moins une variable.")
 
     with tab3:
         corr_df = df_demo[NUM_COLS + ['FloodProbability']].corr()
 
         fig4 = px.imshow(
-            corr_df,
-            color_continuous_scale='RdBu_r',
-            zmin=-0.3, zmax=1,
-            title="Matrice de Corrélation",
-            text_auto='.2f',
-            aspect='auto',
-            width=750, height=700
+            corr_df, color_continuous_scale='RdBu_r',
+            zmin=-0.3, zmax=1, text_auto='.2f',
+            title="Matrice de correlation",
+            aspect='auto', width=750, height=680
         )
-        fig4.update_layout(paper_bgcolor='white')
+        fig4.update_layout(**plotly_theme())
         st.plotly_chart(fig4, use_container_width=True)
 
-        # Corrélation avec la cible
         corr_target = corr_df['FloodProbability'].drop('FloodProbability').sort_values()
         fig5 = px.bar(
             x=corr_target.values,
             y=[FEATURE_LABELS.get(c, c) for c in corr_target.index],
             orientation='h',
-            title="Corrélation avec FloodProbability",
+            title="Correlation avec FloodProbability (Pearson)",
             color=corr_target.values,
             color_continuous_scale='Blues',
-            labels={'x': 'Corrélation de Pearson', 'y': 'Variable'}
+            labels={'x': 'Correlation de Pearson', 'y': 'Variable'}
         )
-        fig5.update_layout(plot_bgcolor='#f9fafb', paper_bgcolor='white', height=550)
+        fig5.update_layout(**plotly_theme(), height=530)
         st.plotly_chart(fig5, use_container_width=True)
 
 # ─────────────────────────────────────────────────────────────────────────────
-# PAGE : MODÈLE & PERFORMANCE
+# PAGE : MODELE & PERFORMANCE
 # ─────────────────────────────────────────────────────────────────────────────
-elif page == "🤖 Modèle & Performance":
-    st.markdown("## 🤖 Modèle LightGBM & Performances")
+elif page == "Modele & Performance":
+    st.markdown("### Modele LightGBM — Performances")
 
-    col1, col2, col3, col4 = st.columns(4)
-    r2_mean = np.mean(val_r2s)
-    rmse_val = np.sqrt(mean_squared_error(y_true, oof_preds))
-    r2_oof = r2_score(y_true, oof_preds)
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("R² moyen (CV)",    f"{r2_mean:.5f}")
+    c2.metric("R² OOF global",    f"{r2_oof:.5f}")
+    c3.metric("RMSE (OOF)",       f"{rmse:.5f}")
+    c4.metric("Gap Train / Val",  f"{float(np.mean(np.array(train_scores) - np.array(val_scores))):.5f}")
 
-    col1.metric("R² Moyen (CV)", f"{r2_mean:.4f}")
-    col2.metric("R² OOF Global", f"{r2_oof:.4f}")
-    col3.metric("RMSE (OOF)", f"{rmse_val:.4f}")
-    col4.metric("Score Kaggle Public", "0.86931 🏆")
-
-    tab1, tab2, tab3 = st.tabs(["📊 R² par Fold", "🔍 Résidus", "🌟 Importance"])
+    tab1, tab2, tab3 = st.tabs(["R² par Fold", "Analyse des residus", "Importance des variables"])
 
     with tab1:
-        fig = go.Figure()
-        colors = ['#1a56db' if v >= r2_mean else '#93c5fd' for v in val_r2s]
-        fig.add_trace(go.Bar(
-            x=[f"Fold {i+1}" for i in range(len(val_r2s))],
-            y=val_r2s,
-            marker_color=colors,
-            text=[f"{v:.4f}" for v in val_r2s],
+        fig_cv = go.Figure()
+        colors_bar = [ACCENT if v >= r2_mean else '#93c5fd' for v in val_scores]
+        fig_cv.add_trace(go.Bar(
+            x=[f"Fold {i+1}" for i in range(len(val_scores))],
+            y=val_scores,
+            marker_color=colors_bar,
+            text=[f"{v:.5f}" for v in val_scores],
             textposition='outside',
-            name='R² par Fold'
+            name='R² validation'
         ))
-        fig.add_hline(y=r2_mean, line_dash="dash", line_color="red",
-                      annotation_text=f"Moyenne = {r2_mean:.4f}",
-                      annotation_position="top right")
-        fig.update_layout(
-            title="R² de Validation par Fold (K-Fold, K=5)",
-            yaxis_title="R²", xaxis_title="Fold",
-            plot_bgcolor='#f9fafb', paper_bgcolor='white',
-            yaxis=dict(range=[min(val_r2s)-0.01, 1.0]), height=400
+        fig_cv.add_trace(go.Scatter(
+            x=[f"Fold {i+1}" for i in range(len(train_scores))],
+            y=train_scores,
+            mode='lines+markers',
+            line=dict(dash='dot', color='#ef4444', width=1.5),
+            marker=dict(size=6),
+            name='R² train'
+        ))
+        fig_cv.add_hline(
+            y=r2_mean, line_dash="dash", line_color="#6b7280",
+            annotation_text=f"Moyenne val = {r2_mean:.5f}",
+            annotation_position="top right"
         )
-        st.plotly_chart(fig, use_container_width=True)
+        fig_cv.update_layout(
+            **plotly_theme(),
+            title="R² par fold — Validation croisee K-Fold (K=5)",
+            yaxis=dict(range=[min(val_scores) - 0.01, max(train_scores) + 0.01]),
+            height=400, legend=dict(orientation='h', y=-0.15)
+        )
+        st.plotly_chart(fig_cv, use_container_width=True)
 
-        summary_df = pd.DataFrame({
-            'Fold': [f"Fold {i+1}" for i in range(len(val_r2s))],
-            'R² Validation': [f"{v:.5f}" for v in val_r2s]
+        summary = pd.DataFrame({
+            'Fold':         [f"Fold {i+1}" for i in range(5)],
+            'R² Train':     [f"{v:.5f}" for v in train_scores],
+            'R² Validation':[f"{v:.5f}" for v in val_scores],
+            'Gap':          [f"{t-v:.5f}" for t, v in zip(train_scores, val_scores)]
         })
-        summary_df.loc[len(summary_df)] = ['**Moyenne ± Écart-type**',
-                                             f"**{r2_mean:.5f} ± {np.std(val_r2s):.5f}**"]
-        st.table(summary_df)
+        st.dataframe(summary, use_container_width=True, hide_index=True)
+        st.caption(f"Moyenne val : {r2_mean:.5f} ± {np.std(val_scores):.5f}  |  "
+                   f"Gap moyen : {float(np.mean(np.array(train_scores)-np.array(val_scores))):.5f}")
 
     with tab2:
         residuals = y_true - oof_preds
@@ -546,268 +758,271 @@ elif page == "🤖 Modèle & Performance":
         with col1:
             fig_r1 = px.scatter(
                 x=oof_preds[:3000], y=residuals[:3000],
-                labels={'x': 'Valeurs prédites', 'y': 'Résidus'},
-                title="Résidus vs Prédictions (3k points)",
-                opacity=0.3, color_discrete_sequence=['#1a56db']
+                labels={'x': 'Valeurs predites', 'y': 'Residus'},
+                title="Residus vs Predictions (3k pts)",
+                opacity=0.25, color_discrete_sequence=[ACCENT]
             )
-            fig_r1.add_hline(y=0, line_dash="dash", line_color="red", line_width=2)
-            fig_r1.update_layout(plot_bgcolor='#f9fafb', paper_bgcolor='white', height=380)
+            fig_r1.add_hline(y=0, line_dash="dash", line_color="#ef4444", line_width=1.5)
+            fig_r1.update_layout(**plotly_theme(), height=370)
             st.plotly_chart(fig_r1, use_container_width=True)
 
         with col2:
             fig_r2 = px.histogram(
                 x=residuals, nbins=80,
-                labels={'x': 'Résidus', 'y': 'Fréquence'},
-                title="Distribution des Résidus",
-                color_discrete_sequence=['#1a56db']
+                labels={'x': 'Residus', 'y': 'Frequence'},
+                title="Distribution des residus",
+                color_discrete_sequence=[ACCENT]
             )
-            fig_r2.add_vline(x=0, line_dash="dash", line_color="red", line_width=2)
-            fig_r2.update_layout(plot_bgcolor='#f9fafb', paper_bgcolor='white', height=380)
+            fig_r2.add_vline(x=0, line_dash="dash", line_color="#ef4444", line_width=1.5)
+            fig_r2.update_layout(**plotly_theme(), height=370)
             st.plotly_chart(fig_r2, use_container_width=True)
 
         fig_r3 = px.scatter(
             x=y_true[:3000], y=oof_preds[:3000],
-            labels={'x': 'Valeurs réelles', 'y': 'Valeurs prédites'},
-            title="Valeurs Réelles vs Prédites (3k points)",
-            opacity=0.3, color_discrete_sequence=['#1a56db']
+            labels={'x': 'Valeurs reelles', 'y': 'Valeurs predites'},
+            title="Reelles vs Predites (3k pts)",
+            opacity=0.25, color_discrete_sequence=[ACCENT]
         )
         lims = [min(y_true.min(), oof_preds.min()), max(y_true.max(), oof_preds.max())]
-        fig_r3.add_shape(type='line', x0=lims[0], y0=lims[0], x1=lims[1], y1=lims[1],
-                         line=dict(color='red', dash='dash', width=2))
-        fig_r3.update_layout(plot_bgcolor='#f9fafb', paper_bgcolor='white', height=420)
+        fig_r3.add_shape(
+            type='line', x0=lims[0], y0=lims[0], x1=lims[1], y1=lims[1],
+            line=dict(color='#ef4444', dash='dash', width=1.5)
+        )
+        fig_r3.update_layout(**plotly_theme(), height=400)
         st.plotly_chart(fig_r3, use_container_width=True)
 
-        col3, col4, col5 = st.columns(3)
-        col3.metric("Résidu moyen", f"{np.mean(residuals):.5f}")
-        col4.metric("Résidu médian", f"{np.median(residuals):.5f}")
-        col5.metric("Écart-type des résidus", f"{np.std(residuals):.5f}")
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Residu moyen",    f"{np.mean(residuals):.5f}")
+        c2.metric("Residu median",   f"{np.median(residuals):.5f}")
+        c3.metric("Ecart-type res.", f"{np.std(residuals):.5f}")
 
     with tab3:
         imp_df = pd.DataFrame({
-            'feature': feature_cols,
+            'feature':    feature_cols,
             'importance': model.feature_importances_
-        }).sort_values('importance', ascending=False).head(20)
-        imp_df['feature_label'] = imp_df['feature'].apply(
-            lambda x: FEATURE_LABELS.get(x, x)
-        )
+        }).sort_values('importance', ascending=False).head(25)
+        imp_df['label'] = imp_df['feature'].apply(lambda x: FEATURE_LABELS.get(x, x))
 
         fig_imp = px.bar(
-            imp_df, x='importance', y='feature_label',
-            orientation='h', title="Top 20 Variables — Importance (Gain)",
+            imp_df, x='importance', y='label',
+            orientation='h',
+            title="Top 25 variables — Importance (Gain)",
             color='importance', color_continuous_scale='Blues',
-            labels={'importance': 'Importance (Gain)', 'feature_label': 'Variable'}
+            labels={'importance': 'Importance (Gain)', 'label': ''}
         )
-        fig_imp.update_layout(
-            plot_bgcolor='#f9fafb', paper_bgcolor='white',
-            yaxis=dict(autorange='reversed'), height=600
-        )
+        fig_imp.update_layout(**plotly_theme(), yaxis=dict(autorange='reversed'), height=620)
         st.plotly_chart(fig_imp, use_container_width=True)
 
 # ─────────────────────────────────────────────────────────────────────────────
-# PAGE : PRÉDICTION INTERACTIVE
+# PAGE : PREDICTION INTERACTIVE
 # ─────────────────────────────────────────────────────────────────────────────
-elif page == "🔮 Prédiction Interactive":
-    st.markdown("## 🔮 Simulateur de Risque d'Inondation")
-    st.info("Ajustez les valeurs des 20 variables pour obtenir une estimation de la probabilité d'inondation.")
+elif page == "Prediction Interactive":
+    st.markdown("### Simulateur de risque d'inondation")
+    st.caption("Ajustez les 20 variables pour obtenir une estimation de la probabilite d'inondation.")
 
-    with st.form("prediction_form"):
-        st.markdown("### ⚙️ Paramètres environnementaux et socio-économiques")
-
+    with st.form("pred_form"):
         values = {}
-        groups = [
-            ("🌧️ Facteurs Climatiques", ['MonsoonIntensity', 'ClimateChange']),
-            ("🏔️ Facteurs Géographiques", ['TopographyDrainage', 'Landslides', 'Watersheds', 'CoastalVulnerability']),
-            ("🌳 Facteurs Environnementaux", ['Deforestation', 'Siltation', 'WetlandLoss', 'AgriculturalPractices']),
-            ("🏙️ Facteurs Anthropiques", ['Urbanization', 'Encroachments', 'PopulationScore']),
-            ("🏗️ Infrastructure", ['DamsQuality', 'DrainageSystems', 'DeterioratingInfrastructure', 'RiverManagement']),
-            ("📋 Gouvernance", ['IneffectiveDisasterPreparedness', 'InadequatePlanning', 'PoliticalFactors'])
-        ]
-
-        for group_name, group_cols in groups:
-            st.markdown(f"**{group_name}**")
-            n = len(group_cols)
-            cols = st.columns(min(n, 4))
-            for i, col_name in enumerate(group_cols):
-                label = FEATURE_LABELS.get(col_name, col_name)
-                with cols[i % min(n, 4)]:
+        for cat_name, cat_cols in CATEGORIES.items():
+            st.markdown(f"**{cat_name}**")
+            n = len(cat_cols)
+            cols_ui = st.columns(min(n, 4))
+            for i, col_name in enumerate(cat_cols):
+                with cols_ui[i % min(n, 4)]:
                     values[col_name] = st.slider(
-                        label, min_value=0, max_value=10, value=5, key=col_name
+                        FEATURE_LABELS.get(col_name, col_name),
+                        min_value=0, max_value=10, value=5, key=col_name
                     )
             st.markdown("")
 
-        submitted = st.form_submit_button("🚀 Prédire la probabilité d'inondation", use_container_width=True)
+        submitted = st.form_submit_button("Calculer la probabilite", use_container_width=True)
 
     if submitted:
         prob = predict_single(model, feature_cols, values)
-        prob = float(np.clip(prob, 0.0, 1.0))
-        risk_label, risk_color = flood_risk_label(prob)
+        level, color = risk_level(prob)
 
         st.markdown("---")
-        col1, col2, col3 = st.columns([1, 2, 1])
-
-        with col2:
+        c_l, c_m, c_r = st.columns([1, 2, 1])
+        with c_m:
             st.markdown(f"""
-            <div style='text-align:center; background:linear-gradient(135deg, #f0f9ff, #e0f2fe);
-                         border-radius:16px; padding:2rem; border:2px solid {risk_color};
-                         box-shadow:0 4px 20px rgba(0,0,0,0.1);'>
-                <h2 style='color:{risk_color}; font-size:3rem; margin:0;'>{prob:.1%}</h2>
-                <p style='font-size:1.3rem; margin:0.5rem 0; font-weight:bold;'>Probabilité d'Inondation</p>
-                <span style='font-size:1.5rem;'>{risk_label}</span>
+            <div class='pred-result' style='border-color: {color};'>
+                <div class='pred-value' style='color: {color};'>{prob:.1%}</div>
+                <div class='pred-label'>Probabilite d'inondation estimee</div>
+                <div style='margin-top:0.8rem; font-family: IBM Plex Mono, monospace;
+                             font-size:0.9rem; font-weight:600; color:{color};'>
+                    Niveau : {level}
+                </div>
             </div>
             """, unsafe_allow_html=True)
 
         # Jauge
-        fig_gauge = go.Figure(go.Indicator(
-            mode="gauge+number+delta",
+        fig_g = go.Figure(go.Indicator(
+            mode="gauge+number",
             value=prob * 100,
             domain={'x': [0, 1], 'y': [0, 1]},
-            title={'text': "Risque d'Inondation (%)", 'font': {'size': 16}},
-            delta={'reference': 50},
+            title={'text': "Risque (%)", 'font': {'size': 13, 'family': 'IBM Plex Mono'}},
+            number={'suffix': '%', 'font': {'family': 'IBM Plex Mono', 'size': 28}},
             gauge={
                 'axis': {'range': [0, 100], 'tickwidth': 1},
-                'bar': {'color': risk_color},
-                'bgcolor': "white",
+                'bar':  {'color': color},
+                'bgcolor': "rgba(0,0,0,0)",
                 'steps': [
-                    {'range': [0, 35], 'color': '#d1fae5'},
-                    {'range': [35, 55], 'color': '#fef3c7'},
-                    {'range': [55, 70], 'color': '#fed7aa'},
-                    {'range': [70, 100], 'color': '#fee2e2'},
+                    {'range': [0,  35], 'color': 'rgba(22,163,74,0.12)'},
+                    {'range': [35, 55], 'color': 'rgba(217,119,6,0.12)'},
+                    {'range': [55, 70], 'color': 'rgba(234,88,12,0.12)'},
+                    {'range': [70,100], 'color': 'rgba(220,38,38,0.12)'},
                 ],
-                'threshold': {
-                    'line': {'color': "darkred", 'width': 4},
-                    'thickness': 0.8, 'value': prob * 100
-                }
             }
         ))
-        fig_gauge.update_layout(paper_bgcolor='white', height=300, margin=dict(t=40, b=0))
-        st.plotly_chart(fig_gauge, use_container_width=True)
+        fig_g.update_layout(**plotly_theme(), height=260)
+        st.plotly_chart(fig_g, use_container_width=True)
 
-        # Variables les plus influentes
-        st.markdown("#### 📊 Contribution des facteurs saisis")
-        contrib = {FEATURE_LABELS.get(k, k): v for k, v in values.items()}
-        contrib_df = pd.DataFrame(list(contrib.items()), columns=['Variable', 'Valeur'])
-        contrib_df = contrib_df.sort_values('Valeur', ascending=False)
+        # Contribution des variables saisies
+        contrib_df = pd.DataFrame({
+            'Variable': [FEATURE_LABELS.get(k, k) for k in values],
+            'Valeur':   list(values.values())
+        }).sort_values('Valeur', ascending=True)
 
-        fig_contrib = px.bar(
+        fig_c = px.bar(
             contrib_df, x='Valeur', y='Variable',
             orientation='h', color='Valeur',
             color_continuous_scale='Blues',
-            title="Valeurs saisies par variable (0–10)",
+            title="Profil des variables saisies (echelle 0–10)",
             range_x=[0, 10]
         )
-        fig_contrib.update_layout(plot_bgcolor='#f9fafb', paper_bgcolor='white', height=520)
-        st.plotly_chart(fig_contrib, use_container_width=True)
+        fig_c.update_layout(**plotly_theme(), height=500)
+        st.plotly_chart(fig_c, use_container_width=True)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # PAGE : FEATURE ENGINEERING
 # ─────────────────────────────────────────────────────────────────────────────
-elif page == "📐 Feature Engineering":
-    st.markdown("## 📐 Ingénierie des Variables")
+elif page == "Feature Engineering":
+    st.markdown("### Ingenierie des variables")
+    st.caption("Construction de ~68 nouvelles variables a partir des 20 features originales.")
 
-    st.markdown("""
-    Le feature engineering est l'étape qui a le plus contribué à l'amélioration du score.
-    Voici les familles de nouvelles variables créées :
-    """)
-
-    col1, col2 = st.columns(2)
+    col1, col2 = st.columns(2, gap="large")
 
     with col1:
-        with st.expander("🔗 Interactions métier", expanded=True):
+        with st.expander("Interactions metier", expanded=True):
             st.markdown("""
-            **ClimateAnthropogenicInteraction**
-            ```python
-            (MonsoonIntensity + ClimateChange) ×
-            (Deforestation + Urbanization + AgriculturalPractices + Encroachments)
-            ```
-            Capture l'effet combiné du stress climatique et des perturbations humaines.
+**ClimateAnthropogenicInteraction**
+```python
+(MonsoonIntensity + ClimateChange) *
+(Deforestation + Urbanization +
+ AgriculturalPractices + Encroachments)
+```
+Stress climatique × perturbations humaines.
 
-            **InfrastructurePreventionInteraction**
-            ```python
-            (DamsQuality + DrainageSystems + DeterioratingInfrastructure) ×
-            (RiverManagement + IneffectiveDisasterPreparedness + InadequatePlanning)
-            ```
-            Mesure l'efficacité combinée des infrastructures et de la gouvernance.
+**InfrastructurePreventionInteraction**
+```python
+(DamsQuality + DrainageSystems +
+ DeterioratingInfrastructure) *
+(RiverManagement +
+ IneffectiveDisasterPreparedness +
+ InadequatePlanning)
+```
+Qualite d'infrastructure × gouvernance.
             """)
 
-        with st.expander("📊 Statistiques de ligne", expanded=True):
-            features_stats = {
-                'row_sum': 'Somme des 20 variables',
-                'row_mean': 'Moyenne arithmétique',
-                'row_std': 'Écart-type',
-                'row_max': 'Valeur maximale',
-                'row_min': 'Valeur minimale',
-                'row_range': 'Amplitude (max − min)',
-                'row_median': 'Médiane',
-                'row_mode': 'Mode (valeur la plus fréquente)',
-                'row_cv': 'Coefficient de variation (std/mean)',
-                'harmonic_mean': 'Moyenne harmonique',
-                'geometric_mean': 'Moyenne géométrique',
-            }
-            for feat, desc in features_stats.items():
-                st.markdown(f"• **`{feat}`** : {desc}")
+        with st.expander("Statistiques de ligne", expanded=True):
+            stats_list = [
+                ('row_sum',        'Somme des 20 variables'),
+                ('row_mean',       'Moyenne arithmetique'),
+                ('row_std',        'Ecart-type'),
+                ('row_max',        'Valeur maximale'),
+                ('row_min',        'Valeur minimale'),
+                ('row_range',      'Amplitude (max - min)'),
+                ('row_median',     'Mediane'),
+                ('row_cv',         'Coefficient de variation (std/mean)'),
+                ('harmonic_mean',  'Moyenne harmonique'),
+                ('geometric_mean', 'Moyenne geometrique'),
+            ]
+            for feat, desc in stats_list:
+                st.markdown(
+                    f"<span style='font-family: IBM Plex Mono, monospace; font-size:0.82rem;'>`{feat}`</span>"
+                    f"<span style='font-size:0.82rem; opacity:0.7;'> — {desc}</span>",
+                    unsafe_allow_html=True
+                )
 
     with col2:
-        with st.expander("📈 Moments statistiques", expanded=True):
-            st.markdown("""
-            • **`row_skew`** : Asymétrie de la distribution (Skewness)
-            • **`row_kurt`** : Aplatissement (Kurtosis)
-            • **`2nd_moment`** : 2ème moment (moyenne des carrés)
-            • **`3rd_moment`** : 3ème moment (moyenne des cubes)
-            • **`row_zscore`** : Z-score moyen normalisé
-            • **`entropy`** : Entropie de Shannon de la distribution des valeurs
-            • **`skewness_75`** : Skewness basée sur le 3ème quartile
-            • **`skewness_25`** : Skewness basée sur le 1er quartile
-            """)
+        with st.expander("Moments statistiques", expanded=True):
+            moments = [
+                ('row_skew',     'Asymetrie (skewness)'),
+                ('row_kurt',     'Aplatissement (kurtosis)'),
+                ('2nd_moment',   'Moyenne des carres'),
+                ('3rd_moment',   'Moyenne des cubes'),
+                ('entropy',      'Entropie de Shannon'),
+                ('skewness_75',  'Skewness via Q75'),
+                ('skewness_25',  'Skewness via Q25'),
+            ]
+            for feat, desc in moments:
+                st.markdown(
+                    f"<span style='font-family: IBM Plex Mono, monospace; font-size:0.82rem;'>`{feat}`</span>"
+                    f"<span style='font-size:0.82rem; opacity:0.7;'> — {desc}</span>",
+                    unsafe_allow_html=True
+                )
 
-        with st.expander("📉 Quantiles de ligne", expanded=True):
+        with st.expander("Quantiles de ligne (q10 ... q90)", expanded=True):
             st.markdown("""
-            Percentiles calculés sur les 20 features originales pour chaque observation :
-            - **`q10`** à **`q90`** (par pas de 10%)
-            
-            Ces quantiles capturent la forme de la distribution des valeurs pour chaque ligne.
-            """)
+<span style='font-size:0.85rem; opacity:0.8;'>
+9 percentiles calcules sur les 20 features par observation (par pas de 10 %).
+Capturent la forme de la distribution de chaque ligne.
+</span>
+            """, unsafe_allow_html=True)
 
-        with st.expander("🔢 Comptages de valeurs", expanded=True):
+        with st.expander("Comptages de valeurs (cnt_0 ... cnt_15)", expanded=True):
             st.markdown("""
-            Pour chaque valeur entière `v` de 0 à 15 :
-            ```python
-            cnt_v = nombre de colonnes ayant exactement la valeur v
-            ```
-            Ces features encodent implicitement le profil de risque global
-            (ex. : beaucoup de valeurs élevées ↔ risque élevé).
-            """)
+```python
+cnt_v = nombre de colonnes ayant exactement la valeur v
+```
+<span style='font-size:0.85rem; opacity:0.8;'>
+16 features encodant le profil de risque discret de chaque observation.
+</span>
+            """, unsafe_allow_html=True)
 
-    # Visualisation de l'impact
     st.markdown("---")
-    st.markdown("### 📊 Nombre de features créées par famille")
+    st.markdown("#### Repartition des features par famille")
 
     families = {
-        'Interactions métier': 2,
-        'Statistiques de ligne': 11,
-        'Moments statistiques': 8,
-        'Quantiles (10%–90%)': 9,
-        'Moyennes harm./géom.': 2,
-        'Comptages (cnt_v)': 16,
-        'Features originales normalisées': 20
+        'Originales normalisees': 20,
+        'Interactions metier':    2,
+        'Statistiques de ligne':  10,
+        'Moments statistiques':   7,
+        'Quantiles (deciles)':    9,
+        'Comptages (cnt_v)':      16,
+        'Features originales':    20,
     }
-    fig = px.bar(
-        x=list(families.keys()), y=list(families.values()),
-        title=f"Répartition des {sum(families.values())} features par famille",
-        color=list(families.values()),
+    # deduplicate — affichage cumulatif
+    families_display = {
+        'Interactions metier':    2,
+        'Statistiques de ligne':  10,
+        'Moments statistiques':   7,
+        'Quantiles (deciles)':    9,
+        'Comptages (cnt_v)':      16,
+        'Originales (normalisees)':20,
+    }
+    total_fe = sum(families_display.values())
+    fig_fe = px.bar(
+        x=list(families_display.keys()), y=list(families_display.values()),
+        title=f"Repartition des {total_fe} features creees par famille",
+        color=list(families_display.values()),
         color_continuous_scale='Blues',
-        labels={'x': 'Famille de features', 'y': 'Nombre de features'}
+        labels={'x': 'Famille', 'y': 'Nombre de features'}
     )
-    fig.update_layout(plot_bgcolor='#f9fafb', paper_bgcolor='white', height=380,
-                      xaxis_tickangle=-30, showlegend=False)
-    st.plotly_chart(fig, use_container_width=True)
+    fig_fe.update_layout(
+        **plotly_theme(), height=360,
+        xaxis_tickangle=-25, showlegend=False
+    )
+    st.plotly_chart(fig_fe, use_container_width=True)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # FOOTER
 # ─────────────────────────────────────────────────────────────────────────────
 st.markdown("""
-<div class='footer'>
-    🌊 Flood Prediction Dashboard · Judicaël Karol DOBOEVI · ENSGMM, Bénin<br>
-    Projet Fil Conducteur — Formation Data Scientist · Africa Tech Up Tour<br>
-    LightGBM · K-Fold Cross-Validation · Score R² : 0.869
+<div class='dash-footer'>
+    Flood Prediction Dashboard &nbsp;·&nbsp;
+    Judicael Karol DOBOEVI &nbsp;·&nbsp;
+    ENSGMM, Benin &nbsp;·&nbsp;
+    Projet Fil Conducteur — Africa Tech Up Tour &nbsp;·&nbsp;
+    LightGBM · K-Fold Cross-Validation
 </div>
 """, unsafe_allow_html=True)
